@@ -2,7 +2,7 @@ require('dotenv').config();
 const express=require('express'),cors=require('cors'),helmet=require('helmet'),cookieParser=require('cookie-parser'),bcrypt=require('bcryptjs'),crypto=require('crypto');
 const app=express(),PORT=process.env.PORT||3000,OPENAI_API_KEY=process.env.OPENAI_API_KEY||'',OPENAI_MODEL=process.env.OPENAI_MODEL||'gpt-4o-mini',ALLOWED_ORIGIN=process.env.ALLOWED_ORIGIN||'*',APP_BASE_URL=process.env.APP_BASE_URL||'',NG_CASH_PAYMENT_LINK=process.env.NG_CASH_PAYMENT_LINK||'',NG_CASH_PIX_KEY=process.env.NG_CASH_PIX_KEY||'',NG_CASH_CONTACT=process.env.NG_CASH_CONTACT||'';
 app.use(helmet({contentSecurityPolicy:false}));app.use(cors({origin:ALLOWED_ORIGIN==='*'?true:ALLOWED_ORIGIN,credentials:true}));app.use(express.json({limit:'1mb'}));app.use(cookieParser());app.use(express.static('public'));
-const users=new Map(),sessions=new Map(),history=new Map();
+const users=new Map(),sessions=new Map(),history=new Map(),chatHistory=new Map();
 const PLANS={free:{name:'Grátis',price:'R$ 0',credits:10,label:'Teste rápido'},pro:{name:'Pro',price:'R$ 19,90/mês',credits:300,label:'Adultos e criadores'},premium:{name:'Premium',price:'R$ 49,90/mês',credits:1200,label:'Empresas e famílias'}};
 const safeUser=u=>({email:u.email,name:u.name,plan:u.plan,credits:u.credits});
 function getUser(req){const t=req.cookies.session;if(!t)return null;const email=sessions.get(t);return email?users.get(email):null}
@@ -10,6 +10,23 @@ function auth(req,res,next){const u=getUser(req);if(!u)return res.status(401).js
 function setSession(res,email){const t=crypto.randomBytes(32).toString('hex');sessions.set(t,email);res.cookie('session',t,{httpOnly:true,sameSite:'lax',secure:process.env.NODE_ENV==='production',maxAge:2592000000})}
 function audience(a){return({adultos:'adultos: linguagem clara, prática e orientada a decisão.',criancas:'crianças: linguagem lúdica, educativa, segura, sem dados pessoais, sem conteúdo impróprio e com supervisão adulta.',empresas:'empresas: tom profissional, foco em conversão, reputação, WhatsApp, Instagram e atendimento.'})[a]||'empresas: foco comercial.'}
 function contentType(t){return({post:'Crie um post curto para rede social.',legenda:'Crie legenda para Instagram com gancho, corpo e CTA.',whatsapp:'Crie mensagem de vendas para WhatsApp, natural e objetiva.',calendario:'Crie calendário semanal com 5 ideias de conteúdo.',aula:'Crie atividade educativa simples, segura e divertida.',empresa:'Crie campanha comercial com oferta, canais e CTA.'})[t]||'Crie um post.'}
+function fallbackChat(message){
+  const m=String(message||'').trim();
+  if(!m)return 'Me diga o que você quer criar, vender, organizar ou explicar.';
+  return `Entendi. Vou te ajudar com isso:
+
+${m}
+
+Resposta rápida:
+1. Defina o objetivo principal.
+2. Escreva para uma pessoa específica, não para todo mundo.
+3. Use uma chamada simples para ação.
+
+Exemplo pronto:
+"Tenho uma solução prática para ${m}. Se quiser, me chame no WhatsApp e eu te explico em poucos minutos."
+
+Obs.: a OpenAI está sem créditos/quota; esta resposta veio do modo reserva do Nexa Digital.`;
+}
 app.get('/api/health',(req,res)=>res.json({ok:true,app:'Nexa Digital Públicos'}));app.get('/api/plans',(req,res)=>res.json({plans:PLANS}));app.get('/api/me',(req,res)=>{const u=getUser(req);res.json({user:u?safeUser(u):null})});
 app.post('/api/signup',async(req,res)=>{const{name,email,password}=req.body||{};if(!name||!email||!password)return res.status(400).json({error:'Nome, e-mail e senha são obrigatórios.'});const key=String(email).toLowerCase().trim();if(users.has(key))return res.status(409).json({error:'Este e-mail já está cadastrado.'});const user={name,email:key,passwordHash:await bcrypt.hash(password,10),plan:'free',credits:PLANS.free.credits,createdAt:new Date().toISOString()};users.set(key,user);history.set(key,[]);setSession(res,key);res.json({user:safeUser(user)})});
 app.post('/api/login',async(req,res)=>{const{email,password}=req.body||{},key=String(email||'').toLowerCase().trim(),u=users.get(key);if(!u||!(await bcrypt.compare(password||'',u.passwordHash)))return res.status(401).json({error:'E-mail ou senha inválidos.'});setSession(res,key);res.json({user:safeUser(u)})});
@@ -49,6 +66,30 @@ function fallbackContent(aud,type,businessName,topic,tone,reason=''){
   return `Título: ${topic}\n\nConteúdo pronto:\n${marca} apresenta uma ideia prática sobre ${topic}. Use tom ${estilo}, destaque o principal benefício e convide a pessoa para dar o próximo passo.\n\nCTA: Salve este conteúdo e compartilhe com quem precisa.\n\n#ConteudoInteligente #NexaDigital #MarketingDigital\n\n${reason}`;
 }
 
+app.get('/api/chat',auth,(req,res)=>res.json({messages:chatHistory.get(req.user.email)||[]}));
+app.post('/api/chat',auth,async(req,res)=>{
+  const{message}=req.body||{};
+  const text=String(message||'').trim();
+  if(!text)return res.status(400).json({error:'Digite uma mensagem.'});
+  if(req.user.credits<=0)return res.status(402).json({error:'Seus créditos acabaram. Faça upgrade.'});
+  const list=chatHistory.get(req.user.email)||[];
+  const recent=list.slice(-10).map(m=>({role:m.role,content:m.content}));
+  let answer='',mode='ai';
+  if(OPENAI_API_KEY){
+    try{
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${OPENAI_API_KEY}`},body:JSON.stringify({model:OPENAI_MODEL,messages:[{role:'system',content:'Você é o Nexa Digital, um assistente estilo ChatGPT em pt-BR. Ajude com marketing, vendas, ideias, textos, estudo e negócios. Seja claro, útil e direto. Não invente credenciais nem prometa ações externas.'},...recent,{role:'user',content:text}],temperature:.7})});
+      if(r.ok){const d=await r.json();answer=d.choices?.[0]?.message?.content||'';}else{answer=fallbackChat(text);mode='fallback';}
+    }catch(e){answer=fallbackChat(text);mode='fallback';}
+  }else{answer=fallbackChat(text);mode='demo';}
+  if(!answer){answer=fallbackChat(text);mode='fallback';}
+  const now=new Date().toISOString();
+  const userMsg={id:crypto.randomUUID(),role:'user',content:text,createdAt:now};
+  const botMsg={id:crypto.randomUUID(),role:'assistant',content:answer,createdAt:now,mode};
+  const next=[...list,userMsg,botMsg].slice(-80);
+  chatHistory.set(req.user.email,next);
+  req.user.credits--;
+  res.json({reply:botMsg,messages:next,credits:req.user.credits,mode});
+});
 app.post('/api/generate',auth,async(req,res)=>{
   const{audience:aud,type,businessName,topic,tone}=req.body||{};
   if(!topic)return res.status(400).json({error:'Informe o tema.'});

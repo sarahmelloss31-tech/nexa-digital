@@ -3,173 +3,48 @@ let deferredInstallPrompt = null;
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
 }
-
 window.addEventListener('beforeinstallprompt', event => {
-  event.preventDefault();
-  deferredInstallPrompt = event;
-  const btn = document.getElementById('installBtn');
-  if (btn) btn.hidden = false;
+  event.preventDefault(); deferredInstallPrompt = event;
+  const btn = document.getElementById('installBtn'); if (btn) btn.hidden = false;
 });
-
-async function instalarApp() {
-  if (!deferredInstallPrompt) {
-    alert('Se o botão automático não aparecer, abra o menu do navegador e toque em “Adicionar à tela inicial”.');
-    return;
-  }
-  deferredInstallPrompt.prompt();
-  await deferredInstallPrompt.userChoice;
-  deferredInstallPrompt = null;
-  const btn = document.getElementById('installBtn');
-  if (btn) btn.hidden = true;
-}
+async function instalarApp(){ if(!deferredInstallPrompt){alert('Abra o menu do Chrome e toque em “Adicionar à tela inicial”.');return;} deferredInstallPrompt.prompt(); await deferredInstallPrompt.userChoice; deferredInstallPrompt=null; document.getElementById('installBtn').hidden=true; }
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    ...options
-  });
+  const res = await fetch(path, { credentials:'include', headers:{'Content-Type':'application/json'}, ...options });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Erro inesperado');
   return data;
 }
-
-function val(id) {
-  return document.getElementById(id).value;
+const val = id => document.getElementById(id)?.value || '';
+function setUser(user){ document.getElementById('userBox').textContent = user ? `${user.name || user.email} · ${user.credits} créditos` : 'Você ainda não entrou.'; }
+function esc(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+function addMessage(role, content){
+  const box=document.getElementById('chatMessages');
+  const article=document.createElement('article'); article.className=`msg ${role}`;
+  article.innerHTML=`<div class="avatar">${role==='user'?'S':'N'}</div><div class="bubble">${role==='assistant'?'<strong>Nexa Digital</strong>':''}<p>${esc(content)}</p></div>`;
+  box.appendChild(article); box.scrollTop=box.scrollHeight;
+}
+function renderMessages(messages){
+  const box=document.getElementById('chatMessages'); box.innerHTML='';
+  const list=messages?.length?messages:[{role:'assistant',content:'Oi, Sarah. Sou seu chat de IA. Me peça posts, ideias, mensagens de venda, calendário, aulas ou qualquer ajuda prática.'}];
+  list.forEach(m=>addMessage(m.role,m.content));
 }
 
-function setUser(user) {
-  document.getElementById('userBox').textContent = user
-    ? `${user.name || user.email} · plano ${user.plan} · ${user.credits} créditos`
-    : 'Você ainda não entrou.';
+async function signup(){try{const d=await api('/api/signup',{method:'POST',body:JSON.stringify({name:val('name'),email:val('email'),password:val('password')})});setUser(d.user);await loadChat();}catch(e){alert(e.message)}}
+async function login(){try{const d=await api('/api/login',{method:'POST',body:JSON.stringify({email:val('email'),password:val('password')})});setUser(d.user);await loadChat();}catch(e){alert(e.message)}}
+async function logout(){try{await api('/api/logout',{method:'POST'});setUser(null);renderMessages([]);}catch(e){alert(e.message)}}
+async function loadChat(){try{const d=await api('/api/chat');renderMessages(d.messages);}catch(e){}}
+async function sendChat(message){
+  addMessage('user',message);
+  const wait=document.createElement('article'); wait.className='msg assistant'; wait.id='typing'; wait.innerHTML='<div class="avatar">N</div><div class="bubble"><strong>Nexa Digital</strong><p>Digitando...</p></div>'; document.getElementById('chatMessages').appendChild(wait);
+  try{const d=await api('/api/chat',{method:'POST',body:JSON.stringify({message})}); wait.remove(); renderMessages(d.messages); const me=await api('/api/me'); setUser(me.user);}catch(e){wait.remove(); addMessage('assistant',e.message);}
 }
-
-async function signup() {
-  try {
-    const d = await api('/api/signup', {
-      method: 'POST',
-      body: JSON.stringify({ name: val('name'), email: val('email'), password: val('password') })
-    });
-    setUser(d.user);
-  } catch (e) {
-    alert(e.message);
-  }
+async function loadPlans(){
+  const d=await api('/api/plans');
+  document.getElementById('plans').innerHTML=Object.entries(d.plans).map(([id,p])=>`<article class="plan"><h4>${p.name}</h4><strong>${p.price}</strong><p>${p.credits} créditos · ${p.label}</p>${id==='free'?'':`<button onclick="upgrade('${id}')">Solicitar</button>`}</article>`).join('');
 }
+async function upgrade(plan){try{const d=await api('/api/checkout',{method:'POST',body:JSON.stringify({plan})});const parts=[d.message,`Plano: ${d.planName}`,`Valor: ${d.price}`,`Créditos: ${d.credits}`];if(d.pixKey)parts.push(`Pix/NG.CASH: ${d.pixKey}`);if(d.contact)parts.push(`Comprovante: ${d.contact}`);if(d.paymentLink&&confirm(parts.join('\n')+'\n\nAbrir link?'))window.open(d.paymentLink,'_blank');else alert(parts.join('\n'));}catch(e){alert(e.message)}}
 
-async function login() {
-  try {
-    const d = await api('/api/login', {
-      method: 'POST',
-      body: JSON.stringify({ email: val('email'), password: val('password') })
-    });
-    setUser(d.user);
-    loadHistory();
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-async function logout() {
-  try {
-    await api('/api/logout', { method: 'POST' });
-    setUser(null);
-  } catch (e) {
-    alert(e.message);
-  }
-}
-
-async function generate() {
-  const result = document.getElementById('result');
-  result.textContent = 'Gerando...';
-  try {
-    const d = await api('/api/generate', {
-      method: 'POST',
-      body: JSON.stringify({
-        audience: val('audience'),
-        type: val('type'),
-        businessName: val('businessName'),
-        topic: val('topic'),
-        tone: val('tone')
-      })
-    });
-    result.textContent = d.content;
-    const me = await api('/api/me');
-    setUser(me.user);
-    loadHistory();
-  } catch (e) {
-    result.textContent = e.message;
-  }
-}
-
-async function loadPlans() {
-  const d = await api('/api/plans');
-  document.getElementById('plans').innerHTML = Object.entries(d.plans).map(([id, p]) => `
-    <article class="plan">
-      <h3>${p.name}</h3>
-      <strong>${p.price}</strong>
-      <p>${p.credits} créditos · ${p.label}</p>
-      ${id === 'free' ? '' : `<button onclick="upgrade('${id}')">Solicitar upgrade</button>`}
-    </article>
-  `).join('');
-}
-
-async function upgrade(plan) {
-  try {
-    const d = await api('/api/checkout', {
-      method: 'POST',
-      body: JSON.stringify({ plan })
-    });
-    const parts = [
-      `${d.message}`,
-      `Plano: ${d.planName}`,
-      `Valor: ${d.price}`,
-      `Créditos: ${d.credits}`
-    ];
-    if (d.pixKey) parts.push(`Chave Pix/NG.CASH: ${d.pixKey}`);
-    if (d.contact) parts.push(`Enviar comprovante: ${d.contact}`);
-    const paymentText = parts.join('\\n');
-    if (d.paymentLink) {
-      if (confirm(paymentText + '\\n\\nAbrir link de pagamento agora?')) window.open(d.paymentLink, '_blank');
-    } else {
-      alert(paymentText + '\\n\\nConfigure NG_CASH_PAYMENT_LINK ou NG_CASH_PIX_KEY no Render.');
-    }
-  } catch (e) {
-    if (confirm(e.message + '\\n\\nAtivar em modo demonstração?')) {
-      try {
-        const d = await api('/api/checkout/mock', {
-          method: 'POST',
-          body: JSON.stringify({ plan })
-        });
-        setUser(d.user);
-        alert(d.message);
-      } catch (err) {
-        alert(err.message);
-      }
-    }
-  }
-}
-
-async function loadHistory() {
-  try {
-    const d = await api('/api/history');
-    document.getElementById('history').innerHTML = d.items.map(i => `
-      <article>
-        <strong>${i.topic}</strong>
-        <p>${i.audience} · ${i.type}</p>
-        <small>${new Date(i.createdAt).toLocaleString('pt-BR')}</small>
-      </article>
-    `).join('') || '<p class="muted">Nada gerado ainda.</p>';
-  } catch (e) {}
-}
-
-function copyResult() {
-  navigator.clipboard.writeText(document.getElementById('result').textContent);
-  alert('Copiado.');
-}
-
-(async () => {
-  loadPlans();
-  const me = await api('/api/me');
-  setUser(me.user);
-  loadHistory();
-})();
+document.getElementById('chatForm').addEventListener('submit',e=>{e.preventDefault();const input=document.getElementById('chatInput');const text=input.value.trim();if(!text)return;input.value='';sendChat(text);});
+document.getElementById('chatInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('chatForm').requestSubmit();}});
+(async()=>{loadPlans();const me=await api('/api/me');setUser(me.user);await loadChat();})();
