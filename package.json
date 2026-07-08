@@ -1,0 +1,23 @@
+{
+  "name": "nexa-digital-publicos",
+  "version": "1.0.0",
+  "description": "Nexa Digital para adultos, crianças e empresas com IA segura no backend.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "check": "node --check server.js && node --check public/app.js"
+  },
+  "dependencies": {
+    "bcryptjs": "latest",
+    "cookie-parser": "latest",
+    "cors": "latest",
+    "dotenv": "latest",
+    "express": "latest",
+    "helmet": "latest"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: nexa-digital
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENAI_MODEL
+        value: gpt-4o-mini
+      - key: ALLOWED_ORIGIN
+        value: "*"
+      - key: APP_BASE_URL
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SESSION_SECRET
+        sync: false
+      - key: NG_CASH_PAYMENT_LINK
+        sync: false
+      - key: NG_CASH_PIX_KEY
+        sync: false
+      - key: NG_CASH_CONTACT
+        sync: false
