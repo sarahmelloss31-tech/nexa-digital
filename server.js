@@ -39,5 +39,47 @@ app.post('/api/checkout/mock',auth,(req,res)=>{
   res.json({ok:true,user:safeUser(req.user),message:`Plano ${PLANS[plan].name} ativado em modo demonstração.`})
 });
 app.get('/api/history',auth,(req,res)=>res.json({items:history.get(req.user.email)||[]}));
-app.post('/api/generate',auth,async(req,res)=>{const{audience:aud,type,businessName,topic,tone}=req.body||{};if(!topic)return res.status(400).json({error:'Informe o tema.'});if(req.user.credits<=0)return res.status(402).json({error:'Seus créditos acabaram. Faça upgrade.'});const prompt=`Você é o Nexa Digital. Público: ${audience(aud)} Tipo: ${contentType(type)} Marca: ${businessName||'não informado'} Tema: ${topic}. Tom: ${tone||'claro e persuasivo'}. Entregue em pt-BR com título, conteúdo pronto, CTA e hashtags quando fizer sentido. Para crianças, mantenha segurança e supervisão adulta.`;let content;if(OPENAI_API_KEY){const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${OPENAI_API_KEY}`},body:JSON.stringify({model:OPENAI_MODEL,messages:[{role:'system',content:'Crie conteúdo útil, seguro e comercialmente aplicável.'},{role:'user',content:prompt}],temperature:.7})});if(!r.ok){let details={};try{details=await r.json()}catch{};const code=details?.error?.code;const msg=code==='insufficient_quota'?'A chave OpenAI está sem créditos/quota. Ative Billing na OpenAI para usar IA real.':'Falha na IA. Verifique OPENAI_API_KEY.';return res.status(502).json({error:msg});}const d=await r.json();content=d.choices?.[0]?.message?.content||'Sem resposta da IA.'}else{content=`Título: ${topic}\n\nConteúdo pronto:\n${businessName||'Sua marca'} apresenta uma ideia para ${aud||'seu público'}: ${topic}. Use tom ${tone||'claro'}, destaque o benefício e convide para agir.\n\nCTA: Responda para saber mais.\n\n#NexaDigital #ConteudoComIA #MarketingDigital\n\nModo demonstração: configure OPENAI_API_KEY para IA real.`}req.user.credits--;const item={id:crypto.randomUUID(),createdAt:new Date().toISOString(),audience:aud,type,topic,content};const list=history.get(req.user.email)||[];list.unshift(item);history.set(req.user.email,list.slice(0,50));res.json({content,credits:req.user.credits,item})});
+function fallbackContent(aud,type,businessName,topic,tone,reason=''){
+  const marca=businessName||'Sua marca';
+  const estilo=tone||'claro e persuasivo';
+  if(type==='calendario') return `Calendário semanal — ${topic}\n\nSegunda: post educativo mostrando o problema.\nTerça: dica prática com exemplo simples.\nQuarta: bastidor, história ou curiosidade.\nQuinta: prova social, benefício ou antes/depois.\nSexta: oferta com chamada para WhatsApp.\n\nPúblico: ${aud||'geral'}\nTom: ${estilo}\n\n${reason}`;
+  if(type==='whatsapp') return `Mensagem WhatsApp — ${topic}\n\nOi! Tudo bem? Aqui é da ${marca}.\n\nTenho uma solução sobre ${topic} que pode ajudar de forma prática e rápida. Posso te mandar os detalhes?\n\n${reason}`;
+  if(aud==='criancas') return `Título: ${topic}\n\nAtividade educativa segura:\nExplique ${topic} com palavras simples, proponha uma pergunta divertida e peça para a criança desenhar, contar uma história ou fazer uma pequena brincadeira guiada.\n\nSempre com supervisão de um adulto responsável.\n\nCTA: Chame um adulto e teste essa atividade hoje.\n\n#EducaçãoInfantil #AprenderBrincando #NexaDigital\n\n${reason}`;
+  if(aud==='empresas') return `Título: ${topic}\n\nConteúdo para ${marca}:\nMostre uma dor real do cliente, apresente ${topic} como solução e finalize com uma chamada direta para conversa no WhatsApp.\n\nCTA: Fale com a equipe e peça uma proposta rápida.\n\n#MarketingDigital #VendasOnline #NexaDigital\n\n${reason}`;
+  return `Título: ${topic}\n\nConteúdo pronto:\n${marca} apresenta uma ideia prática sobre ${topic}. Use tom ${estilo}, destaque o principal benefício e convide a pessoa para dar o próximo passo.\n\nCTA: Salve este conteúdo e compartilhe com quem precisa.\n\n#ConteudoInteligente #NexaDigital #MarketingDigital\n\n${reason}`;
+}
+
+app.post('/api/generate',auth,async(req,res)=>{
+  const{audience:aud,type,businessName,topic,tone}=req.body||{};
+  if(!topic)return res.status(400).json({error:'Informe o tema.'});
+  if(req.user.credits<=0)return res.status(402).json({error:'Seus créditos acabaram. Faça upgrade.'});
+  const prompt=`Você é o Nexa Digital. Público: ${audience(aud)} Tipo: ${contentType(type)} Marca: ${businessName||'não informado'} Tema: ${topic}. Tom: ${tone||'claro e persuasivo'}. Entregue em pt-BR com título, conteúdo pronto, CTA e hashtags quando fizer sentido. Para crianças, mantenha segurança e supervisão adulta.`;
+  let content, mode='ai';
+  if(OPENAI_API_KEY){
+    try{
+      const r=await fetch('https://api.openai.com/v1/chat/completions',{method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${OPENAI_API_KEY}`},body:JSON.stringify({model:OPENAI_MODEL,messages:[{role:'system',content:'Crie conteúdo útil, seguro e comercialmente aplicável.'},{role:'user',content:prompt}],temperature:.7})});
+      if(r.ok){
+        const d=await r.json();
+        content=d.choices?.[0]?.message?.content||'';
+      }else{
+        let details={};try{details=await r.json()}catch{};
+        const code=details?.error?.code;
+        const reason=code==='insufficient_quota'?'Obs.: a OpenAI está sem créditos no momento; este conteúdo foi gerado em modo reserva do Nexa Digital.':'Obs.: a IA externa não respondeu; este conteúdo foi gerado em modo reserva do Nexa Digital.';
+        content=fallbackContent(aud,type,businessName,topic,tone,reason);
+        mode='fallback';
+      }
+    }catch(e){
+      content=fallbackContent(aud,type,businessName,topic,tone,'Obs.: conexão com IA indisponível; modo reserva ativado.');
+      mode='fallback';
+    }
+  }else{
+    content=fallbackContent(aud,type,businessName,topic,tone,'Obs.: configure OPENAI_API_KEY para IA real.');
+    mode='demo';
+  }
+  if(!content)content=fallbackContent(aud,type,businessName,topic,tone,'Obs.: resposta vazia da IA; modo reserva ativado.');
+  req.user.credits--;
+  const item={id:crypto.randomUUID(),createdAt:new Date().toISOString(),audience:aud,type,topic,content,mode};
+  const list=history.get(req.user.email)||[];list.unshift(item);history.set(req.user.email,list.slice(0,50));
+  res.json({content,credits:req.user.credits,item,mode});
+});
 app.listen(PORT,()=>console.log(`Nexa Digital Públicos rodando na porta ${PORT}`));
